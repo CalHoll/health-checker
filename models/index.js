@@ -14,7 +14,7 @@ const setUpDb = async () => {
     // TODO: remove hard coded endpoint in code, ideally users add these themselves
     const endpoint = new Endpoint({
         url: 'http://localhost:12345',
-        schedule: '*/2 * * * * *', // every 2 seconds
+        schedule: '*/1 * * * * *', // every 1 seconds
         retention: 1,
     });
 

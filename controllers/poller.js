@@ -29,15 +29,6 @@ let timeUp = 0
 let timeDown = 0
 
 const scheduleHealthCheck = (endpoint) => {
-    /* 
-     * TODO: url validator disabled because it was failing for url's with ports
-     */
-    // Verify that the endpoint url is valid and that the format is correct.
-    // if (!is_url(endpoint.url)) {
-    //     console.error(`Endpoint: ${endpoint.url} was not a valid url`);
-    //     return
-    // }
-
     // TODO: this check should check if the format is correct, not just that it exists.
     if (!endpoint.schedule) {
         console.error(`No schedule provided for endpoint: ${endpoint.url}`);
@@ -46,22 +37,12 @@ const scheduleHealthCheck = (endpoint) => {
 
     cron.schedule(endpoint.schedule, () => {
         // Make call to endpoint
-        // TODO: build in functionality to specify http protocol
-        makeGetRequest(endpoint)
-
-        // Build Result
-
-        // Log to console / write to result database
-
-        // TODO: Check to see if result meets warning or fail conditions
-
-        // if fail condition send error alert notification
-
-        // if warning condition send warning
+        // TODO: could build in functionality to specify http protocol/params
+        makeGetRequestCheck(endpoint)
     });
 }
 
-const makeGetRequest = (endpoint) => {
+const makeGetRequestCheck = (endpoint) => {
     const startTime = Date.now()
     axios({
             method: 'get',
@@ -78,7 +59,10 @@ const makeGetRequest = (endpoint) => {
             }
             // handle success for 200 status code, treat all others as fail
             if (response.status === 200) {
-                handleSuccess(resultParams)
+                handleSuccess({
+                    status: "up",
+                    ...resultParams
+                })
             } else {
                 const newErr = new Error(`${chalk.red('✘')} Failure getting 200 status code from ${endpoint.url} at ${Date.now()}`)
                 handleFail(resultParams, newErr)
@@ -92,27 +76,23 @@ const makeGetRequest = (endpoint) => {
         }))
 }
 
-const handleSuccess = async (params) => {
-    console.log(`${chalk.green('✓')} Endpoint ${params.url} succeeded at time ${Date.now()}, request took ${params.totalTime}ms`);
+const handleSuccess = async (upParams) => {
+    console.log(`${chalk.green('✓')} Endpoint ${upParams.url} succeeded at time ${Date.now()}, request took ${upParams.totalTime}ms`);
 
-    // check to see if status has changed for this endpoint
-    checkStatusChange({
-        endpointId: params.endpointId,
-        timestamp: params.timestamp,
-        status: "up"
-    })
+    // check status changes, update metrics, cache current event as prev
+    checkStatusChange(upParams)
 
-    updateMetrics({
-        status: "up",
-        ...params
-    })
+    updateMetrics(upParams)
 
+    updatePrevEvent(upParams)
+
+    // TODO: The below shows how results could be saved to persistent storage, the same should be could be done for status's.
     // Build success result and save to database
     const result = new models.Result({
-        url: params.url,
-        timestamp: params.timestamp,
-        statusCode: params.statusCode,
-        resTime: params.totalTime,
+        url: upParams.url,
+        timestamp: upParams.timestamp,
+        statusCode: upParams.statusCode,
+        resTime: upParams.totalTime,
     });
     await result.save()
 }
@@ -127,6 +107,8 @@ const handleFail = async (params, error) => {
     checkDowntimeAndNotify(errParams)
 
     updateMetrics(errParams)
+
+    updatePrevEvent(errParams)
 }
 
 const checkStatusChange = (event) => {
@@ -147,7 +129,7 @@ const checkStatusChange = (event) => {
             timestamp: event.timestamp
         }]
     }
-    updatePrevEvent(event)
+
 }
 
 const updatePrevEvent = (event) => {
@@ -164,10 +146,16 @@ const checkDowntimeAndNotify = (errParams) => {
 
     // first determine time since last status change
     const statusArr = statusChanges[errParams.endpointId];
-    const lastChange = statusArr[statusArr.length - 1].timestamp;
-    const timeSinceChange = Date.now() - lastChange;
 
-    console.log(`${chalk.red('✘')} ALERT: ${errParams.url} has been down for ${timeSinceChange}s!`)
+    // skip if first time run
+    const previousEvent = statusArr[statusArr.length - 1];
+    if (previousEvent) {
+        const lastChange = previousEvent.timestamp;
+
+        const timeSinceChange = (Date.now() - lastChange) / 1000; // converted to sec
+
+        console.log(`${chalk.red('✘')} ALERT: ${errParams.url} has been down for ${timeSinceChange}s!`)
+    }
 }
 
 // updateMetrics will re-compute uptime percent and time since status change
@@ -175,24 +163,28 @@ const updateMetrics = (event) => {
     const endpointId = event.endpointId
 
     // add current timespan to up or downtime total durations
-    const timeSinceLastEvent = Date.now() - lastResult[endpointId].timestamp
-    if (event.status === "up") {
-        timeUp += timeSinceLastEvent
-    } else {
-        timeDown += timeSinceLastEvent
-    }
 
-    // calculate current performance and log to console
-    upPercent = (timeUp / (timeUp + timeDown)) * 100
-    if (metrics[endpointId]) {
-        metrics[endpointId].uptimePercent = upPercent
-    } else {
-        metrics[endpointId] = {
-            uptimePercent: upPercent
+    // skip on first call
+    if (lastResult[endpointId]) {
+        const timeSinceLastEvent = (Date.now() - lastResult[endpointId].timestamp) / 1000
+        if (event.status === "up") {
+            timeUp += timeSinceLastEvent
+        } else {
+            timeDown += timeSinceLastEvent
         }
+
+        // calculate current performance and log to console
+        upPercent = (timeUp / (timeUp + timeDown)) * 100
+        if (metrics[endpointId]) {
+            metrics[endpointId].uptimePercent = upPercent
+        } else {
+            metrics[endpointId] = {
+                uptimePercent: upPercent
+            }
+        }
+        const upPercentNice = upPercent.toFixed(2) + "%";
+        console.log(`  Since service began, endpoint has been up for ${timeUp}s and was down for ${timeDown}s, for an uptime percent of ${upPercentNice}`)
     }
-    const upPercentNice = upPercent.toFixed(2) + "%";
-    console.log(`  Since service began, endpoint has been up for ${timeUp}s and was down for ${timeDown}s, for an uptime percent of ${upPercentNice}`)
 }
 
 module.exports = {
