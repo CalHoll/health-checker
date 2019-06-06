@@ -155,6 +155,8 @@ const checkDowntimeAndNotify = (errParams) => {
         const timeSinceChange = (Date.now() - lastChange) / 1000; // converted to sec
 
         console.log(`${chalk.red('✘')} ALERT: ${errParams.url} has been down for ${timeSinceChange}s!`)
+
+        // TODO: Here is where I would check if it's been down for more then ~30 seconds? And then trigger the SMS
     }
 }
 
